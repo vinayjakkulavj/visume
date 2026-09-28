@@ -1,0 +1,27 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import vm from 'node:vm';
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
+import {build} from 'esbuild';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const options={absWorkingDir:root,bundle:true,write:false,jsx:'automatic',target:'es2022',alias:{'@':path.join(root,'src')},define:{'process.env.NODE_ENV':'"production"'}};
+const client=await build({...options,entryPoints:['src/main.tsx'],format:'iife',minify:true});
+const snapshot=await build({...options,stdin:{contents:"import React from 'react';import{renderToStaticMarkup}from'react-dom/server';import App from './src/App';export const markup=renderToStaticMarkup(<App/>);",resolveDir:root,loader:'tsx'},platform:'node',format:'cjs'});
+const mod={exports:{}};
+vm.runInNewContext(snapshot.outputFiles[0].text,{module:mod,exports:mod.exports,require:createRequire(import.meta.url),process,console,TextEncoder,TextDecoder,URL,setTimeout,clearTimeout,queueMicrotask,ReadableStream,performance});
+const markup=mod.exports.markup;
+if((markup.match(/id="chapter-\d"/g)||[]).length!==6)throw Error('Expected all six resume slides');
+const css=await fs.readFile(path.join(root,'src/styles.css'),'utf8');
+const js=client.outputFiles[0].text;
+const document=(styles,scripts,content)=>`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090b12"><title>Vinay Jakkula | Visume</title><meta name="description" content="Vinay Jakkula's data engineering portfolio">${styles}</head><body><div id="root">${content}</div>${scripts}</body></html>`;
+await fs.mkdir(path.join(root,'dist/assets'),{recursive:true});
+await fs.cp(path.join(root,'public'),path.join(root,'dist'),{recursive:true});
+await fs.writeFile(path.join(root,'dist/assets/app.js'),js);
+await fs.writeFile(path.join(root,'dist/assets/styles.css'),css);
+await fs.writeFile(path.join(root,'dist/index.html'),document('<link rel="stylesheet" href="assets/styles.css">','<script src="assets/app.js" defer></script>',markup));
+let single=document(`<style>${css}</style>`,`<script>${js.replace(/<\/script/gi,'<\\/script')}</script>`,markup);
+for(const name of ['intro','migration','lineage']){const bytes=await fs.readFile(path.join(root,`public/images/${name}.webp`));single=single.replaceAll(`images/${name}.webp`,'data:image/webp;base64,'+bytes.toString('base64'));}
+await fs.mkdir(path.join(root,'standalone'),{recursive:true});
+await fs.writeFile(path.join(root,'standalone/index.html'),single);
+console.log('Built dist/ and standalone/index.html. Verified all six slides.');
